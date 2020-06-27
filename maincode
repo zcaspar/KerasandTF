@@ -1,0 +1,128 @@
+LSTM with TensorFlow and Keras
+The code below was adapted from: https://www.coursera.org/learn/named-entity-recognition-lstm-keras-tensorflow/ungradedLti/mbo1Q/named-entity-recognition-using-lstms-with-keras, accessed 17/5/2020.
+
+# import modules and libraries
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+np.random.seed(0)
+plt.style.use("ggplot")
+Import tensorflow as tf
+import tensorflow.keras
+import livelossplot
+
+# load data as pandas dataframe
+data = pd.read_csv("/home/caspar/Coding/datascience/nlp_dissertation/filename.csv", encoding="latin1")
+
+# fill any gaps in the data
+data = data.fillna(method="ffill")
+
+#look at the top 20 entries
+data.head(20)
+
+# look at number of unique words 
+print("Unique words in corpus:", data['Word'].nunique())
+
+# get set of all words and add end padding 
+words = list(set(data["Word"].values))
+words.append("ENDPAD")
+# create a variable for number of unique words
+num_words = len(words)
+
+# list all the tags, though for this problem there are only two: O and SKILL
+tags = list(set(data["Tag"].values))
+num_tags = len(tags)
+ 
+# create a class to retrieve job advertisements
+class JobGetter(object):
+    def __init__(self, data):
+        self.n_sent = 1
+        self.data = data
+        self.empty = False
+        agg_func = lambda s: [(w, p, t) for w, p, t in zip(s["Word"].values.tolist(),
+                                                           s["POS"].values.tolist(),
+                                                           s["Tag"].values.tolist())]
+        self.grouped = self.data.groupby("Sentence #").apply(agg_func)
+        self.sentences = [s for s in self.grouped]
+    
+    def get_next(self):
+        try:
+            s = self.grouped["Sentence: {}".format(self.n_sent)]
+            self.n_sent += 1
+            return s
+        except:
+            return None
+ 
+# use above class to retrieve data 
+getter = JobGetter(data)
+sentences = getter.sentences
+ 
+# map jobs to tags
+ word2idx = {w: i + 1 for i, w in enumerate(words)}
+tag2idx = {t: i for i, t in enumerate(tags)}
+ 
+ 
+# create a bar chart of all sentence lengths
+plt.hist([len(s) for s in sentences], bins=50)
+plt.show()
+ 
+ 
+# pad any job descriptions smaller than 100 words long 
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+max_len = 100
+ 
+# define inputs
+X = [[word2idx[w[0]] for w in s] for s in sentences]
+X = pad_sequences(maxlen=max_len, sequences=X, padding="post", value=num_words-1)
+ 
+# define outputs
+y = [[tag2idx[w[2]] for w in s] for s in sentences]
+y = pad_sequences(maxlen=max_len, sequences=y, padding="post", value=tag2idx["O"])
+ 
+ 
+# split the data for training and testing 
+from sklearn.model_selection import train_test_split
+x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
+ 
+ 
+# compile bidirectional LSTM model 
+from tensorflow.keras import Model, Input
+from tensorflow.keras.layers import LSTM, Embedding, Dense
+from tensorflow.keras.layers import TimeDistributed, SpatialDropout1D, Bidirectional
+input_word = Input(shape=(max_len,))
+model = Embedding(input_dim=num_words, output_dim=50, input_length=max_len)(input_word)
+model = SpatialDropout1D(0.1)(model)
+model = Bidirectional(LSTM(units=100, return_sequences=True, recurrent_dropout=0.1))(model)
+out = TimeDistributed(Dense(num_tags, activation="softmax"))(model)
+model = Model(input_word, out)
+model.summary() 
+model.compile(optimizer="adam", loss="sparse_categorical_crossentropy", metrics=["accuracy"])
+ 
+# train the model
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+ 
+chkpt = ModelCheckpoint("model_weights.h5", monitor='val_loss',verbose=1, save_best_only=True, save_weights_only=True, mode='min')
+ 
+early_stopping = EarlyStopping(monitor='val_accuracy', min_delta=0, patience=1, verbose=0, mode='max', baseline=None, restore_best_weights=False)
+
+# set number of passes through the data (epochs) as well as the batch size (keep low as running without GPU) 
+history = model.fit(
+    x=x_train,
+    y=y_train,
+    validation_data=(x_test,y_test),
+    batch_size=32, 
+    epochs=5,
+    #callbacks=callbacks,
+    verbose=1
+)
+ 
+# evaluate model
+model.evaluate(x_test, y_test)
+i = np.random.randint(0, x_test.shape[0]) #659
+p = model.predict(np.array([x_test[i]]))
+p = np.argmax(p, axis=-1)
+y_true = y_test[i]
+print("{:15}{:5}\t {}\n".format("Word", "True", "Pred"))
+print("-" *30)
+for w, true, pred in zip(x_test[i], y_true, p[0]):
+    print("{:15}{}\t{}".format(words[w-1], tags[true], tags[pred]))
